@@ -266,8 +266,8 @@ function TextDataset.RandomOrder(input, ts)
          print('it worked 1')
          img = ts[order[i]]
          print('it worked 2')
-         local filename_randomOrder="augmented_data/randomOrder"..i..".jpg"
-         image.save(filename_randomOrder, img)
+         --local filename_randomOrder="augmented_data/randomOrder"..i..".jpg"
+         --image.save(filename_randomOrder, img)
       end
       return img
 end
@@ -320,7 +320,7 @@ function TextDataset:preprocess()
    -- local ts = {}
     -- table.insert(ts, TextDataset.Brightness(tmp_im,12))
     
-    local color_jitter_img = TextDataset.ColorJitter(tmp_im, 100,  0.1, 0.4) 
+    local color_jitter_img = TextDataset.ColorJitter(tmp_im, 0.4,  0.4, 0.4) 
     --[[local displayed_img = TextDataset.Compose(tmp_im, {TextDataset.RandomSizedCrop(tmp_im, 224), 
             TextDataset.Lighting(tmp_im, 0.1, pca.eigval, pca.eigvec),
             TextDataset.ColorNormalize(tmp_im, meanstd),
