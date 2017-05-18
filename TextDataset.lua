@@ -37,7 +37,7 @@ local pca = {
 function TextDataset.Compose(input, transforms)
   local tmp_composed_img = input:clone()
   for _, transform in ipairs(transforms) do
-    tmp_composed_img = transform(tmp_composed_img)
+    tmp_composed_img = transform
   end
   return tmp_composed_img 
 end
@@ -316,20 +316,18 @@ function TextDataset:preprocess()
     local lighting_img = TextDataset.Lighting(tmp_im, 0.1, pca.eigval, pca.eigvec)
     local saturation_img = TextDataset.Saturation(tmp_im, 15)
     local constrasted_img = TextDataset.Contrast(tmp_im, 100)
-    --local randomOrder_img = TextDataset.RandomOrder(tmp_im, )
-   -- local ts = {}
-    -- table.insert(ts, TextDataset.Brightness(tmp_im,12))
+   
     
     local color_jitter_img = TextDataset.ColorJitter(tmp_im, 0.4,  0.4, 0.4) 
-    --[[local displayed_img = TextDataset.Compose(tmp_im, {TextDataset.RandomSizedCrop(tmp_im, 224), 
+    local displayed_img = TextDataset.Compose(tmp_im, {TextDataset.RandomSizedCrop(tmp_im, 224), 
             TextDataset.Lighting(tmp_im, 0.1, pca.eigval, pca.eigvec),
             TextDataset.ColorNormalize(tmp_im, meanstd),
             TextDataset.HorizontalFlip(tmp_im, 0.5),
-            })]]--
+            })
          
 
-   -- display.image({tmp_im, displayed_img}, {win='final'})
-    image.save(filename_left, color_jitter_img)
+    display.image({tmp_im, displayed_img}, {win='final'})
+    image.save(filename_left, displayed_img)
 end
 
 return M.TextDataset 
