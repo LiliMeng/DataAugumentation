@@ -24,8 +24,8 @@ function getConfig()
         neighbourWidth   = 30,
         neighbourHeight  = 10,
 
-        nThreads         = 3,
-        batchSize        = 8,
+        nThreads         = 4,
+        batchSize        = 2,
         dataset          = 'XTGTData',
         dataset_path     = '/scratch/datasets/bb1/',
 
@@ -120,15 +120,36 @@ function createModel(config)
     require('nngraph')
     require 'nnx'
 
-    local shortcutType = 'B'
+    local shortcutType = 'C'
 
     local Convolution = cudnn.SpatialConvolution
     local Avg = cudnn.SpatialAveragePooling
     local ReLU = cudnn.ReLU
     local Max = cudnn.SpatialMaxPooling
     local SBatchNorm = cudnn.SpatialBatchNormalization
+    
 
     -- The shortcut layer is either identity or 1x1 convolution
+    local function shortcut(nInputPlane, nOutputPlane, strideX, strideY)
+    --[[  local useConv = shortcutType == 'C' or
+         (shortcutType == 'B' and nInputPlane ~= nOutputPlane)]]--
+      if 1 then
+         -- 1x1 convolution
+         return nn.Sequential()
+            :add(Convolution(nInputPlane, nOutputPlane, 1, 1, strideX, strideY))
+            :add(SBatchNorm(nOutputPlane))
+      elseif nInputPlane ~= nOutputPlane then
+         -- Strided, zero-padded identity shortcut
+         return nn.Sequential()
+            :add(nn.SpatialAveragePooling(1, 1, strideX, strideY))
+            :add(nn.Concat(2)
+               :add(nn.Identity())
+               :add(nn.MulConstant(0)))
+      else
+         return nn.Identity()
+      end
+    end
+    --[[-- The shortcut layer is either identity or 1x1 convolution
     local function shortcut(nInputPlane, nOutputPlane, strideX, strideY)
       local useConv = shortcutType == 'C' or
          (shortcutType == 'B' and nInputPlane ~= nOutputPlane)
@@ -147,13 +168,13 @@ function createModel(config)
       else
          return nn.Identity()
       end
-    end
+    end]]--
 
     -- The basic residual layer block for 18 and 34 layer network, and the
     -- CIFAR networks
     local function basicblock(n, strideX, strideY)
       local nInputPlane = iChannels
-      iChannels = n 
+      iChannels = n
 
       local s = nn.Sequential()
       s:add(Convolution(nInputPlane,n,3,3,strideX,strideY,1,1))
@@ -170,91 +191,43 @@ function createModel(config)
          :add(ReLU(true))
     end
 
-    -- The original bottleneck residual layer for 50, 101, and 152 layer network
-    local function resnet_bottleneck(n, stride)
-        local nInputPlane = iChannels
-        iChannels = n * 4
-
-        local s = nn.Sequential()
-        s:add(Convolution(nInputPlane, n, 1,1,1,1, 0, 0))
-        s:add(SBatchNorm(n))
-        s:add(ReLU(true))
-        s:add(Convolution(n,n,3,3,stride,stride,1,1))
-        s:add(SBatchNorm(n))
-        s:add(ReLu(true))
-        s:add(Convolution(n, n*4, 1, 1, 1, 1, 0, 0))
-        s:add(SBatchNorm(n*4))
-
-        return nn.Sequential()
-            :add(nn.ConcatTable()
-                :add(s)
-                :add(shortcut(nInputPlane, n*4, stride)))
-            :add(nn.CAddTable(true))
-            :add(ReLU(true))
-    end
-
     -- The aggregated residual transformation bottleneck layer, Form (B)
-    local function split(nInputPlane, d, c, stride)
-        local cat = nn.ConcatTable()
-        for i=1, c do
-            local s = nn.Sequential()
-            s:add(Convolution(nInputPlane, d, 1, 1, 1,1, 0, 0))
-            s:add(SBatchNorm(d))
-            s:add(ReLU(true))
-            s:add(Convolution(d,d,3,3,stride, stride, 1,1))
-            s:add(SBatchNorm(d))
-            s:add(ReLU(true))
-            cat:add(s)
-        end
-        return cat
-    end
+   local function split(nInputPlane, d, c, strideX, strideY)
+      local cat = nn.ConcatTable()
+      for i=1,c do
+         local s = nn.Sequential()
+         s:add(Convolution(nInputPlane,d,1,1,1,1,0,0))
+         s:add(SBatchNorm(d))
+         s:add(ReLU(true))
+         s:add(Convolution(d,d,3,3,strideX,strideY,1,1))
+         s:add(SBatchNorm(d))
+         s:add(ReLU(true))
+         cat:add(s)
+      end
+      return cat
+   end
+   
+   local function resnext_bottleneck_B(n, strideX, strideY)
+      local nInputPlane = iChannels
+      iChannels = n * 4
 
-    local function resnext_bottleneck_B(n, stride)
-        local nInputPlane = iChannels
-        iChannels = n *4
+      local D = math.floor(n * (64/64))
+      local C = 16
 
-        local D = math.floor(n*(64/64))
-        local C = 32
+      local s = nn.Sequential()
+      s:add(split(nInputPlane, D, C, strideX, strideY))
+      s:add(nn.JoinTable(2))
+      s:add(Convolution(D*C,n*4,1,1,1,1,0,0))
+      s:add(SBatchNorm(n*4))
 
-        local s = nn.Sequential()
-        s:add(split(nInputPlane, D, C, stride))
-        s:add(nn.JoinTable(2))
-        s:add(Convolution(D*C, n*4, 1, 1, 1,1, 0,0))
-        s:add(SBatchNorm(n*4))
-
-        return nn.Sequential()
-            :add(nn.ConcatTable()
-                :add(s)
-                :add(shortcut(nInputPlane, n*4, stride)))
-            :add(nn.CAddTable(true))
-            :add(ReLU(true))
-    end 
-
-    -- The aggregated residual transformation bottleneck layer, Form (C)
-    local function resnext_bottleneck_C(n, stride)
-        local nInputPlane = iChannels
-        iChannels = n*4
-
-        local D = math.floor(n*(64/64))
-        local C = 32
-
-        local s = nn.Sequential()
-        s:add(Convolution(nInputPlane, D*C, 1, 1,1,1,0,0))
-        s:add(SBatchNorm(D*C))
-        s:add(ReLU(true))
-        s:add(Convolution(D*C, D*C, 3, 3, stride, stride, 1, 1, C))
-        s:add(SBatchNorm(D*C))
-        s:add(ReLU(true))
-        s:add(Convolution(D*C, n*4, 1,1,1,1,0,0))
-        s:add(SBatchNorm(n*4))
-
-        return nn.Sequential()
-            :add(nn.ConcatTable()
-                :add(s)
-                :add(shortcut(nInputPlane, n*4, stride)))
-            :add(nn.CAddTable(true))
-            :add(ReLU(true))
-    end 
+      return nn.Sequential()
+         :add(nn.ConcatTable()
+            :add(s)
+            :add(shortcut(nInputPlane, n * 4, strideX, strideY)))
+         :add(nn.CAddTable(true))
+         :add(ReLU(true))
+   end
+    
 
     -- Creates count residual blocks with specified number of features
     local function layer(block, features, count, strideX, strideY)
@@ -268,9 +241,8 @@ function createModel(config)
     iChannels = 16
 
     local inp = nn.Identity()()
-
-    bottleneck = resnext_bottleneck_B
-
+    
+    local bottleneck = resnext_bottleneck_B
     -- model and criterion
     local model_f1 = nn.Sequential()
     model_f1:add(nn.AddConstant(-128.0))
@@ -279,14 +251,15 @@ function createModel(config)
     model_f1:add(Convolution(1,16, 3,3, 1,1, 1,1))
     model_f1:add(SBatchNorm(16))
     model_f1:add(ReLU(true))
-    model_f1:add(layer(basicblock, 16, 2))
+   -- model_f1:add(layer(basicblock, 16, 2))
+    model_f1:add(layer(bottleneck, 16, 2))
 
     local f1 = model_f1(inp) -- 1x16x32x200
 
     local model_f2 = nn.Sequential()
     model_f2:add(layer(bottleneck, 32, 4, 2, 2))
     local f2 = model_f2(f1) -- 1x32x16x100
-
+    print(f2)
     local model_f3 = nn.Sequential()
     model_f3:add(layer(bottleneck, 64, 6, 2, 2))   
     local f3 = model_f3(f2)
@@ -324,6 +297,8 @@ function createModel(config)
 
     local model = nn.gModule({inp},{seg_output})
 
+  
+
     local function ConvInit(name)
       for k,v in pairs(model:findModules(name)) do
          local n = v.kW*v.kH*v.nOutputPlane
@@ -359,5 +334,6 @@ end
 
 if doMain() then
     model = createModel(getConfig())
-    output = model:forward(torch.randn(5,1, 256,256):cuda());
+   
+    output = model:forward(torch.randn(2,1, 256,256):cuda());
 end
